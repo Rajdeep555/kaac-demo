@@ -1,10 +1,8 @@
 import axios from "axios";
 
 export const http = axios.create({
-    baseURL: "http://localhost:5000/api/v1/",
-    // baseURL: "http://13.50.113.43:3000/api/v1/", //main
-    // baseURL: "http://32.199.40.117:5000/api/v1/", //testing
-
+    // baseURL: "http://localhost:5000/api/v1/",
+    baseURL: "http://32.199.40.117:5000/api/v1/", 
 });
 
 const STORAGE_KEY = "app_auth";
