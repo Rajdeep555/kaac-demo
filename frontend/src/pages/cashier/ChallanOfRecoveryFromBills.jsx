@@ -1,0 +1,651 @@
+// ChallanOfRecoveryFromBills.jsx
+import React, { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import DataTable from "../../components/DataTable/DataTable";
+import TableButton from "../../components/ui/TableButton";
+import { useChallanFromBill } from "../../hooks/useChallanFromBill.js";
+import { LuDownload } from "react-icons/lu";
+
+const todayStr = () => new Date().toISOString().slice(0, 10);
+
+// Modal shows only the major head code
+const headCode = (row) => row.majorHead || "-";
+
+// ── Fixed pivot grid: Head 01 .. Head 17, keyed by the numeric value of
+//    majorHead (e.g. "011" -> 11 -> "11"), not by order of appearance. ──
+const HEAD_COUNT = 17;
+
+const normalizeHead = (code) => {
+  const num = parseInt(code, 10);
+  if (isNaN(num) || num < 1 || num > HEAD_COUNT) return null;
+  return String(num).padStart(2, "0");
+};
+
+// ── CSV export — no external dependency, plain Blob download ──
+const csvField = (value) => {
+  const str = value === null || value === undefined ? "" : String(value);
+  return `"${str.replace(/"/g, '""')}"`;
+};
+
+const downloadRecoveryChallanCsv = (groupedByDate, title) => {
+  const lines = [
+    ["#", "Date", "Head Code", "Challan No", "Amount Type", "Amount"]
+      .map(csvField)
+      .join(","),
+  ];
+
+  let srNo = 1;
+  let grandTotal = 0;
+
+  groupedByDate.forEach(({ date, headGroups, subtotal }) => {
+    headGroups.forEach(({ head, rows, subtotal: headSubtotal }) => {
+      rows.forEach((r) => {
+        lines.push(
+          [
+            srNo,
+            date,
+            head,
+            r.challanNo,
+            r.amountType || "-",
+            r.amountNum.toFixed(2),
+          ]
+            .map(csvField)
+            .join(","),
+        );
+        srNo++;
+      });
+      lines.push(
+        ["", "", "", "", `Total for Head ${head}`, headSubtotal.toFixed(2)]
+          .map(csvField)
+          .join(","),
+      );
+    });
+    lines.push(
+      ["", "", "", "", `Total for ${date}`, subtotal.toFixed(2)]
+        .map(csvField)
+        .join(","),
+    );
+    grandTotal += subtotal;
+  });
+
+  lines.push(
+    ["", "", "", "", "GRAND TOTAL", grandTotal.toFixed(2)]
+      .map(csvField)
+      .join(","),
+  );
+
+  const csv = lines.join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${title.replace(/\s+/g, "-")}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+// ── CSV export for the pivot view — Date row x Head columns matrix ──
+const downloadRecoveryPivotCsv = (
+  heads,
+  headLabels,
+  pivotRows,
+  headTotals,
+  grandTotal,
+  title,
+) => {
+  const lines = [
+    ["Date", ...heads.map((h) => headLabels[h]), "Total"]
+      .map(csvField)
+      .join(","),
+  ];
+
+  pivotRows.forEach((row) => {
+    lines.push(
+      [
+        row.date,
+        ...heads.map((h) => (row.amounts[h] ? row.amounts[h].toFixed(2) : "")),
+        row.total.toFixed(2),
+      ]
+        .map(csvField)
+        .join(","),
+    );
+  });
+
+  lines.push(
+    [
+      "TOTAL",
+      ...heads.map((h) => (headTotals[h] ? headTotals[h].toFixed(2) : "")),
+      grandTotal.toFixed(2),
+    ]
+      .map(csvField)
+      .join(","),
+  );
+
+  const csv = lines.join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${title.replace(/\s+/g, "-")}-head-wise.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+// ── Modal: rows grouped by date — Sr No, Date, Head Code, Challan No,
+//    Amount Type, Amount — with a subtotal row per date and a grand total.
+//    Also offers a "Head-wise Matrix" view: Date rows x Head columns
+//    (fixed 01-17 grid). ──
+const RecoveryChallanListModal = ({ title, rows, onClose }) => {
+  const [viewMode, setViewMode] = useState("list"); // "list" | "pivot"
+
+  // Nested: date -> head groups, each head group has its own subtotal,
+  // and each date has an overall subtotal (sum of its head subtotals)
+  const groupedByDate = useMemo(() => {
+    const byDate = new Map();
+    [...rows]
+      .sort((a, b) =>
+        (a.rawDate || "") < (b.rawDate || "")
+          ? -1
+          : (a.rawDate || "") > (b.rawDate || "")
+            ? 1
+            : 0,
+      )
+      .forEach((r) => {
+        const key = r.rawDate || "Unknown Date";
+        if (!byDate.has(key)) byDate.set(key, []);
+        byDate.get(key).push(r);
+      });
+
+    return Array.from(byDate.entries()).map(([date, dateRows]) => {
+      const byHead = new Map();
+      [...dateRows]
+        .sort((a, b) => headCode(a).localeCompare(headCode(b)))
+        .forEach((r) => {
+          const key = headCode(r);
+          if (!byHead.has(key)) byHead.set(key, []);
+          byHead.get(key).push(r);
+        });
+
+      const headGroups = Array.from(byHead.entries()).map(
+        ([head, headRows]) => ({
+          head,
+          rows: headRows,
+          subtotal: headRows.reduce((sum, r) => sum + (r.amountNum || 0), 0),
+        }),
+      );
+
+      return {
+        date,
+        headGroups,
+        subtotal: headGroups.reduce((sum, h) => sum + h.subtotal, 0),
+      };
+    });
+  }, [rows]);
+
+  const grandTotal = groupedByDate.reduce((sum, g) => sum + g.subtotal, 0);
+
+  // ── Pivot: fixed 17 columns (Head 01 – Head 17), keyed by the numeric
+  //    value of majorHead. Dates become rows; cell = sum of amounts for
+  //    that date+head, blank when none. Codes outside 1-17 are skipped
+  //    in this grid (they still show correctly in the List view). ──
+  const { heads, headLabels, pivotRows, headTotals } = useMemo(() => {
+    const fixedHeads = Array.from({ length: HEAD_COUNT }, (_, i) =>
+      String(i + 1).padStart(2, "0"),
+    );
+
+    const labelByCode = {};
+    fixedHeads.forEach((code) => {
+      labelByCode[code] = code;
+    });
+
+    const byDate = new Map();
+    rows.forEach((r) => {
+      const normalized = normalizeHead(headCode(r));
+      if (!normalized) return; // skip codes outside 1-17, or unparsable
+      const dateKey = r.rawDate || "Unknown Date";
+      if (!byDate.has(dateKey)) byDate.set(dateKey, {});
+      const bucket = byDate.get(dateKey);
+      bucket[normalized] = (bucket[normalized] || 0) + (r.amountNum || 0);
+    });
+
+    const sortedDates = Array.from(byDate.keys()).sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
+
+    const rowsOut = sortedDates.map((date) => {
+      const amounts = byDate.get(date);
+      const total = Object.values(amounts).reduce((s, v) => s + v, 0);
+      return { date, amounts, total };
+    });
+
+    const totalsOut = {};
+    fixedHeads.forEach((code) => {
+      totalsOut[code] = rowsOut.reduce((s, r) => s + (r.amounts[code] || 0), 0);
+    });
+
+    return {
+      heads: fixedHeads,
+      headLabels: labelByCode,
+      pivotRows: rowsOut,
+      headTotals: totalsOut,
+    };
+  }, [rows]);
+
+  const pivotGrandTotal = Object.values(headTotals).reduce((s, v) => s + v, 0);
+
+  const handleDownload = () => {
+    if (viewMode === "list") {
+      downloadRecoveryChallanCsv(groupedByDate, title);
+    } else {
+      downloadRecoveryPivotCsv(
+        heads,
+        headLabels,
+        pivotRows,
+        headTotals,
+        pivotGrandTotal,
+        title,
+      );
+    }
+  };
+
+  let runningSrNo = 0;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}>
+      <div
+        className={`w-full bg-white rounded-lg shadow-lg flex flex-col max-h-[80vh] ${
+          viewMode === "pivot" ? "max-w-5xl" : "max-w-2xl"
+        }`}
+        onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-200 gap-3 flex-wrap">
+          <h2 className="font-unbounded text-lg font-normal">{title}</h2>
+          <div className="flex items-center gap-3">
+            {/* ── View toggle ── */}
+            <div className="flex rounded-md border border-zinc-300 overflow-hidden text-xs font-semibold">
+              <button
+                onClick={() => setViewMode("list")}
+                className={`px-3 py-1.5 transition ${
+                  viewMode === "list"
+                    ? "bg-zinc-800 text-white"
+                    : "bg-white text-zinc-600 hover:bg-zinc-50"
+                }`}>
+                List
+              </button>
+              <button
+                onClick={() => setViewMode("pivot")}
+                className={`px-3 py-1.5 transition border-l border-zinc-300 ${
+                  viewMode === "pivot"
+                    ? "bg-zinc-800 text-white"
+                    : "bg-white text-zinc-600 hover:bg-zinc-50"
+                }`}>
+                Head 01-{String(HEAD_COUNT).padStart(2, "0")}
+              </button>
+            </div>
+
+            {rows.length > 0 && (
+              <button
+                onClick={handleDownload}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-50 transition">
+                <LuDownload size={13} />
+                Download CSV
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="text-zinc-400 hover:text-zinc-700 text-xl leading-none"
+              aria-label="Close">
+              ×
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-auto px-5 py-3">
+          {rows.length === 0 ? (
+            <p className="text-sm text-zinc-400 py-8 text-center">
+              No challans found.
+            </p>
+          ) : viewMode === "list" ? (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-zinc-500 border-b border-zinc-200">
+                  <th className="py-2 pr-2">#</th>
+                  <th className="py-2 pr-2">Date</th>
+                  <th className="py-2 pr-2">Head Code</th>
+                  <th className="py-2 pr-2">Challan No</th>
+                  <th className="py-2 pr-2">Amount Type</th>
+                  <th className="py-2 text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {groupedByDate.map((dateGroup) => (
+                  <React.Fragment key={dateGroup.date}>
+                    {dateGroup.headGroups.map((headGroup) => (
+                      <React.Fragment
+                        key={`${dateGroup.date}-${headGroup.head}`}>
+                        {headGroup.rows.map((r) => {
+                          runningSrNo++;
+                          return (
+                            <tr key={r.id} className="border-b border-zinc-100">
+                              <td className="py-2 pr-2 text-zinc-400">
+                                {runningSrNo}
+                              </td>
+                              <td className="py-2 pr-2">{dateGroup.date}</td>
+                              <td className="py-2 pr-2">{headCode(r)}</td>
+                              <td className="py-2 pr-2 font-medium">
+                                {r.challanNo}
+                              </td>
+                              <td className="py-2 pr-2">
+                                {r.amountType || "-"}
+                              </td>
+                              <td className="py-2 text-right">
+                                {r.amountNum.toLocaleString("en-IN")}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {/* ── Per-head subtotal, within this date ── */}
+                        <tr className="bg-zinc-50 border-b border-zinc-100">
+                          <td
+                            colSpan={5}
+                            className="py-1.5 pr-2 text-right font-semibold text-zinc-600">
+                            Total for Head {headGroup.head}
+                          </td>
+                          <td className="py-1.5 text-right font-semibold text-zinc-700">
+                            ₹{headGroup.subtotal.toLocaleString("en-IN")}
+                          </td>
+                        </tr>
+                      </React.Fragment>
+                    ))}
+                    {/* ── Date-level total, after all heads for this date ── */}
+                    <tr className="bg-zinc-100 border-b border-zinc-200">
+                      <td
+                        colSpan={5}
+                        className="py-1.5 pr-2 text-right font-semibold text-zinc-700">
+                        Total for {dateGroup.date}
+                      </td>
+                      <td className="py-1.5 text-right font-semibold text-zinc-800">
+                        ₹{dateGroup.subtotal.toLocaleString("en-IN")}
+                      </td>
+                    </tr>
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="text-left text-zinc-500 border-b border-zinc-200">
+                  <th className="py-2 pr-2 sticky left-0 bg-white">Date</th>
+                  {heads.map((h) => (
+                    <th
+                      key={h}
+                      className="py-2 px-2 text-right whitespace-nowrap">
+                      {headLabels[h]}
+                    </th>
+                  ))}
+                  <th className="py-2 pl-2 text-right font-bold">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pivotRows.map((row) => (
+                  <tr key={row.date} className="border-b border-zinc-100">
+                    <td className="py-2 pr-2 font-medium sticky left-0 bg-white">
+                      {row.date}
+                    </td>
+                    {heads.map((h) => (
+                      <td key={h} className="py-2 px-2 text-right">
+                        {row.amounts[h]
+                          ? row.amounts[h].toLocaleString("en-IN")
+                          : ""}
+                      </td>
+                    ))}
+                    <td className="py-2 pl-2 text-right font-semibold">
+                      ₹{row.total.toLocaleString("en-IN")}
+                    </td>
+                  </tr>
+                ))}
+                {/* ── Head-wise totals row ── */}
+                <tr className="bg-zinc-100 border-t border-zinc-300">
+                  <td className="py-2 pr-2 font-bold sticky left-0 bg-zinc-100">
+                    TOTAL
+                  </td>
+                  {heads.map((h) => (
+                    <td key={h} className="py-2 px-2 text-right font-bold">
+                      {headTotals[h]
+                        ? headTotals[h].toLocaleString("en-IN")
+                        : ""}
+                    </td>
+                  ))}
+                  <td className="py-2 pl-2 text-right font-bold">
+                    ₹{pivotGrandTotal.toLocaleString("en-IN")}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {rows.length > 0 && (
+          <div className="flex items-center justify-between px-5 py-4 border-t border-zinc-200 bg-zinc-50 rounded-b-lg">
+            <span className="text-sm text-zinc-500">
+              {rows.length} challan{rows.length !== 1 ? "s" : ""} across{" "}
+              {groupedByDate.length} date{groupedByDate.length !== 1 ? "s" : ""}
+            </span>
+            <span className="font-unbounded text-base">
+              Grand Total: ₹{grandTotal.toLocaleString("en-IN")}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ── Clickable stat card ──
+const StatCard = ({ label, count, onClick, accent = "blue" }) => {
+  const accentClasses =
+    accent === "blue"
+      ? "border-blue-200 hover:bg-blue-50"
+      : "border-zinc-200 hover:bg-zinc-50";
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={count === 0}
+      className={`flex flex-col items-start gap-1 px-5 py-4 rounded-lg border ${accentClasses} transition text-left disabled:opacity-60 disabled:cursor-not-allowed`}>
+      <span className="text-xs uppercase tracking-wide text-zinc-500">
+        {label}
+      </span>
+      <span className="font-unbounded text-2xl font-normal">{count}</span>
+    </button>
+  );
+};
+
+const ChallanOfRecoveryFromBills = () => {
+  const navigate = useNavigate();
+
+  const { challans, loading } = useChallanFromBill(); // ✅ cashier-wise or all, depending on permissions
+
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [activeModal, setActiveModal] = useState(null); // "today" | "filtered" | null
+
+  // ── Rows with a raw ISO date + numeric amount for filtering/summing ──
+  const enrichedChallans = useMemo(() => {
+    return (challans || []).map((row) => ({
+      ...row,
+      rawDate: row.voucharDate ? String(row.voucharDate).slice(0, 10) : "",
+      amountNum: Number(row.amount) || 0,
+    }));
+  }, [challans]);
+
+  const todayChallans = useMemo(
+    () => enrichedChallans.filter((r) => r.rawDate === todayStr()),
+    [enrichedChallans],
+  );
+
+  const hasDateFilter = Boolean(fromDate || toDate);
+  const filteredChallans = useMemo(() => {
+    if (!hasDateFilter) return [];
+    return enrichedChallans.filter((r) => {
+      if (fromDate && r.rawDate < fromDate) return false;
+      if (toDate && r.rawDate > toDate) return false;
+      return true;
+    });
+  }, [enrichedChallans, fromDate, toDate, hasDateFilter]);
+
+  const clearDateFilter = () => {
+    setFromDate("");
+    setToDate("");
+  };
+
+  const columns = [
+    {
+      key: "id",
+      label: "ID",
+    },
+    {
+      key: "challanNo",
+      label: "Challan No",
+    },
+    {
+      key: "voucharDate", // ✅ matches your schema field name (typo in schema)
+      label: "Voucher Date",
+      render: (value) => (value ? new Date(value).toLocaleDateString() : "-"),
+    },
+    {
+      key: "majorHead",
+      label: "Major Head",
+      render: (_, row) =>
+        `${row.majorHead || "-"}-${row.subMajor || "-"}-${row.minorHead || "-"}`,
+    },
+    {
+      key: "ddo",
+      label: "DDO",
+      render: (_, row) => row.expenditure?.ddo?.ddoName || "-",
+    },
+    {
+      key: "amount",
+      label: "Amount",
+      render: (value) =>
+        value ? `₹ ${Number(value).toLocaleString("en-IN")}` : "-",
+    },
+    {
+      key: "amountType",
+      label: "Amount Type",
+    },
+    {
+      key: "treasuryChallanNo",
+      label: "Treasury Challan No",
+      render: (value) => value || "-",
+    },
+    {
+      key: "treasuryChallanDate",
+      label: "Treasury Challan Date",
+      render: (value) => (value ? new Date(value).toLocaleDateString() : "-"),
+    },
+  ];
+
+  if (loading) {
+    return (
+      <div className="p-6 space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="font-unbounded text-3xl font-normal">
+            Challan of Recovery from Bills
+          </h1>
+        </div>
+        <div className="flex flex-col items-center justify-center py-24 gap-4 text-zinc-400">
+          <div className="w-10 h-10 border-4 border-zinc-300 border-t-blue-600 rounded-full animate-spin" />
+          <p className="text-sm">Fetching challans...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="font-unbounded text-3xl font-normal">
+        Challan of Recovery from Bills
+      </h1>
+
+      {/* ── Stats + Date Filter ── */}
+      <div className="flex flex-wrap items-end gap-4">
+        <StatCard
+          label="Today's Recovery Challans"
+          count={todayChallans.length}
+          onClick={() => setActiveModal("today")}
+        />
+
+        {hasDateFilter && (
+          <StatCard
+            label="Filtered Recovery Challans"
+            count={filteredChallans.length}
+            onClick={() => setActiveModal("filtered")}
+            accent="zinc"
+          />
+        )}
+
+        <div className="flex items-end gap-3 ml-auto">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-zinc-500">From</label>
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="px-3 py-2 text-sm border border-zinc-300 rounded"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-zinc-500">To</label>
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              className="px-3 py-2 text-sm border border-zinc-300 rounded"
+            />
+          </div>
+          {hasDateFilter && (
+            <button
+              onClick={clearDateFilter}
+              className="px-3 py-2 text-sm text-zinc-500 hover:text-zinc-800">
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      <DataTable
+        data={hasDateFilter ? filteredChallans : enrichedChallans}
+        columns={columns}
+        loading={loading}
+        emptyMessage={loading ? "Loading..." : "No data found"}
+        searchableKeys={["challanNo", "majorHead", "treasuryChallanNo"]}
+        pageSize={200}
+      />
+
+      {activeModal === "today" && (
+        <RecoveryChallanListModal
+          title="Today's Recovery Challans"
+          rows={todayChallans}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+
+      {activeModal === "filtered" && (
+        <RecoveryChallanListModal
+          title={`Recovery Challans (${fromDate || "…"} to ${toDate || "…"})`}
+          rows={filteredChallans}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+    </div>
+  );
+};
+
+export default ChallanOfRecoveryFromBills;

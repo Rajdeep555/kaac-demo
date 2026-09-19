@@ -1,0 +1,21 @@
+# node
+node_modules/
+
+# env
+.env
+.env.local
+
+# prisma
+prisma/.env
+
+# logs
+logs/
+*.log
+
+# build
+dist/
+build/
+
+# OS
+.DS_Store
+

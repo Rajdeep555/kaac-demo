@@ -1,0 +1,139 @@
+@import "tailwindcss";
+
+@theme {
+    --color-button-green: #3bb199;
+    --color-navlink-red: #ff0000;
+    --color-active: #128591;
+    /* --color-active: #99a1af; */
+    --color-hover: #89c9cf;
+    /* --color-hover: #99a1af; */
+
+    --color-background: #d0e4e5;
+    --color-card: #daeaea;
+
+    /* font families */
+    --font-sans: Arial, sans-serif;
+    --font-inter: Arial, sans-serif;
+    --font-unbounded: Arial, sans-serif;
+}
+
+@layer base {
+
+    html,
+    body {
+        font-family: Arial, sans-serif;
+    }
+
+    *,
+    *::before,
+    *::after {
+        font-family: inherit;
+    }
+}
+
+@layer utilities {
+    .padding {
+        @apply p-1
+    }
+
+    .icon-sm {
+        @apply w-4 h-4
+    }
+
+    .icon-md {
+        @apply w-6 h-6
+    }
+
+    .icon-lg {
+        @apply w-8 h-8
+    }
+
+    .icon-extra-lg {
+        @apply w-10 h-10
+    }
+
+    .icon-cursor {
+        @apply cursor-pointer
+    }
+
+    .active {
+        @apply bg-active text-white rounded-md py-2.5 px-2
+    }
+
+    .hover {
+        @apply hover:bg-hover py-2.5 px-2 rounded-md
+    }
+
+    .translate-x-full {
+        transform: translateX(100%);
+    }
+}
+
+
+.font {
+    @apply text-sm font-medium
+}
+
+.font-small {
+    @apply text-sm
+}
+
+.form8-text {
+    @apply text-start pl-2
+}
+
+.semibold {
+    @apply font-semibold
+}
+
+/* track-point */
+.track-point {
+    @apply h-13 w-13 border-2 border-purple-500 bg-purple-500 cursor-pointer active:scale-95 rounded-full flex justify-center items-center px-4 relative z-10
+}
+
+.track-border {
+    @apply h-13 w-13 border-2 border-purple-500 cursor-pointer active:scale-95 rounded-full flex justify-center items-center px-4 relative z-10 bg-white
+}
+
+
+/* width */
+::-webkit-scrollbar {
+    width: 5px;
+}
+
+/* Track */
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+/* Handle */
+::-webkit-scrollbar-thumb {
+    background: #a2a2a2;
+}
+
+/* Handle on hover */
+::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+@media print {
+
+    /* Hide everything */
+    body * {
+        visibility: hidden;
+    }
+
+    /* Show only print area */
+    #printArea,
+    #printArea * {
+        visibility: visible;
+    }
+
+    /* Put it at the top-left of the printed page */
+    #printArea {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+    }
+}

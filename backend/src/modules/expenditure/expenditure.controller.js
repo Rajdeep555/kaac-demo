@@ -1,0 +1,252 @@
+import { createExpenditureSchema } from "./expenditure.schema.js"
+import {
+    createExpenditure,
+    getExpenditureById,
+    getExpenditureForCashier,
+    getVoucherNo,
+    updateExpenditure,  // Add this import
+    getExpendituresForAdmin,  // Add this import
+    deleteExpenditure,
+    getChequeDetails
+} from "./expenditure.service.js";
+import logger from "../../utils/logger.js";
+
+
+const handleError = (res, error, message = "An error occurred") => {
+    console.error(error);
+    res.status(error.status || 500).json({
+        message: error.message || message,
+        error: process.env.NODE_ENV === 'development' ? error : {}
+    });
+};
+
+export const create = async (req, res) => {
+    try {
+        const cashierId = req.user.id;
+
+        // Strip voucherNo from body before parsing — backend generates it
+        const { voucherNo: _ignored, ...bodyWithoutVoucher } = req.body;
+        const payload = createExpenditureSchema.parse(bodyWithoutVoucher);
+
+        const expenditure = await createExpenditure({ ...payload, cashierId });
+
+        return res.status(201).json({
+            success: true,
+            message: "Expenditure Created Successfully",
+            data: expenditure,
+        });
+    } catch (error) {
+        console.error("Create Expenditure Error:", error);
+
+        if (error.code === "P2003") {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid reference ID (Department / DDO / Division not found)",
+                meta: error.meta,
+            });
+        }
+
+        if (error.name === "ZodError") {
+            return res.status(400).json({
+                success: false,
+                message: "Validation failed",
+                errors: error.errors,
+            });
+        }
+
+        return res.status(500).json({
+            success: false,
+            message: "Internal Server Error",
+        });
+    }
+};
+
+
+export const getById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const expenditure = await getExpenditureById(id);
+
+        if (!expenditure) {
+            return res.status(404).json({
+                success: false,
+                message: "Expenditure not found",
+            });
+        }
+
+        // CASHIER can only access his own — unless canViewAllEntries is granted.
+        // NOTE: was req.user.userId (always undefined with the current
+        // authMiddleware, which only sets req.user.id) — every cashier was
+        // getting a false-positive 403 here regardless of ownership.
+        if (
+            req.user.role === "CASHIER" &&
+            !req.user.permissions.canViewAllEntries &&
+            expenditure.cashierId !== req.user.id
+        ) {
+            return res.status(403).json({
+                success: false,
+                message: "Forbidden",
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: expenditure,
+        });
+    } catch (error) {
+        handleError(res, error);
+    }
+};
+
+export const update = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // ✅ Strip voucherNo BEFORE parsing — same as create
+        const { voucherNo: _ignored, ...bodyWithoutVoucher } = req.body;
+        const payload = createExpenditureSchema.parse(bodyWithoutVoucher);
+
+        const existing = await getExpenditureById(id);
+        if (!existing) {
+            return res.status(404).json({
+                success: false,
+                message: "Expenditure not found",
+            });
+        }
+        // Same fix as getById — was req.user.userId
+        if (
+            req.user.role === "CASHIER" &&
+            !req.user.permissions.canEditAllEntries &&
+            existing.cashierId !== req.user.id
+        ) {
+            return res.status(403).json({
+                success: false,
+                message: "Forbidden",
+            });
+        }
+        const updated = await updateExpenditure(id, payload);
+        res.status(200).json({
+            success: true,
+            message: "Expenditure Updated Successfully",
+            data: updated,
+        });
+    } catch (error) {
+        handleError(res, error);
+    }
+};
+
+
+export const fetchNextVoucherNo = async (req, res) => {
+    try {
+        const { type } = req.query;
+        const voucherNo = await getVoucherNo(type);
+        res.json({ voucherNo })
+    } catch (error) {
+        logger.error("Failed to fetch next challan no", error);
+        console.error(error);
+        res.status(400).json({ error: error.message });
+    }
+}
+
+export const getCashierExpenditures = async (req, res) => {
+    try {
+        const cashierId = req.user.id;
+        const { sector, treasury } = req.query;
+
+        const data = await getExpenditureForCashier({
+            cashierId,
+            role: req.user.role,
+            canViewAllEntries: req.user.permissions.canViewAllEntries,
+            sector,
+            hasTreasuryVoucher: treasury === "yes" ? true : treasury === "no" ? false : undefined,
+        })
+
+        res.status(200).json({
+            success: true,
+            data
+        })
+    } catch (error) {
+        logger.error("Failed to fetch expenditure", error);
+        res.status(500).json({  // Fixed: was res.json(500)
+            success: false,
+            message: error.message
+        })
+    }
+}
+
+export const getAdminExpenditures = async (req, res) => {
+    try {
+        // console.log('Query params:', req.query);
+
+        const { sector, month, year } = req.query;
+
+        const data = await getExpendituresForAdmin({
+            sector: sector || undefined,
+            month: month ? Number(month) : undefined,
+            year: year ? Number(year) : undefined,
+        });
+
+        console.log('Fetched data count:', data.length);
+
+        res.status(200).json({
+            success: true,
+            data,
+        });
+    } catch (error) {
+        console.error('Error in getAdminExpenditures:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error : undefined
+        });
+    }
+};
+
+export const remove = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const existing = await getExpenditureById(id);
+        if (!existing) {
+            return res.status(404).json({
+                success: false,
+                message: "Expenditure not found",
+            });
+        }
+
+        if (
+            req.user.role === "CASHIER" &&
+            !req.user.permissions.canDeleteAllEntries &&
+            existing.cashierId !== req.user.id
+        ) {
+            return res.status(403).json({
+                success: false,
+                message: "Forbidden",
+            });
+        }
+
+        await deleteExpenditure(id);
+
+        res.status(200).json({
+            success: true,
+            message: "Expenditure deleted successfully",
+        });
+    } catch (error) {
+        handleError(res, error);
+    }
+};
+
+export const getChequeDetailsHandler = async (req, res) => {
+    try {
+        const { sector, financialYear, month } = req.query;
+        const data = await getChequeDetails({
+            sector: sector || undefined,
+            financialYear: financialYear || undefined,
+            month: month || undefined,
+        });
+        res.status(200).json({ success: true, data });
+    } catch (error) {
+        console.error("getChequeDetails error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};

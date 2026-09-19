@@ -1,0 +1,224 @@
+import { useStatement5 } from "../../hooks/admin/useStatement5";
+import { Loader } from "../ui/Loader";
+
+const AmountCell = ({ value, bold = false }) => (
+  <td className={`border px-4 py-2 align-top ${bold ? "font-bold" : ""}`}>
+    <span className="flex items-center justify-end gap-1">
+      {Number(value ?? 0).toFixed(2)}
+    </span>
+  </td>
+);
+
+const HEADS_CELL_STYLES = {
+  major: "font-bold text-gray-900 pl-3",
+  sub: "font-medium text-gray-700 pl-8",
+  minor: "text-gray-800 pl-12",
+  total: "font-bold text-gray-900 pl-3",
+  grandTotal: "font-bold text-gray-900 pl-3 uppercase tracking-wide",
+};
+
+const isTotalReceiptLabel = (row) =>
+  /total\s+(revenue\s+)?receipt/i.test((row.headsLines ?? []).join(" "));
+
+const HeadsCell = ({ row, forceBold }) => (
+  <td className="border px-3 py-2 text-left align-top">
+    <div
+      className={`leading-snug ${HEADS_CELL_STYLES[row.type] ?? ""} ${
+        forceBold ? "font-bold uppercase tracking-wide" : ""
+      }`}>
+      {row.headsLines.map((line, idx) => (
+        <span key={idx}>{line}</span>
+      ))}
+    </div>
+  </td>
+);
+
+const Statement5 = ({ sector, dateRange }) => {
+  const { statement5Data, loading, error } = useStatement5({
+    sector,
+    dateRange,
+  });
+
+  if (loading) {
+    return (
+      <div className="w-full overflow-x-auto border-2 bg-white p-8 text-center">
+        <Loader />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="w-full overflow-x-auto border-2 bg-white p-8 text-center">
+        <p className="font-medium text-red-600">
+          Failed to load data. Please try again.
+        </p>
+      </div>
+    );
+  }
+
+  const grandTotal = (statement5Data ?? [])
+    .filter((row) => row.type === "minor")
+    .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
+
+  return (
+    <div className="w-full overflow-x-auto border-1 bg-white">
+      {/* 🔸 Print-only rules, scoped to Statement 5 only via these
+          component-local class names. .statement5-tail-block keeps
+          GRAND TOTAL + hr + Explanatory Notes as ONE unbreakable unit
+          — if it doesn't fit on the current page, the whole group
+          (including the actual total figure) moves together onto the
+          next page, so the trailing page always shows real data
+          instead of being nearly empty. The margin/padding overrides
+          below only shrink the block's height FOR PRINT, so that
+          "whole group" is small enough to actually fit on the
+          previous page's leftover space instead of needing its own
+          extra page. */}
+      <style>{`
+        @media print {
+          .statement5-tail-block {
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .statement5-tail-block .statement5-grand-total-wrap {
+            margin-bottom: 4px !important;
+          }
+          .statement5-tail-block hr {
+            margin-bottom: 4px !important;
+          }
+          .statement5-tail-block .statement5-notes-wrap {
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+          }
+          /* 🔸 NEW — Statement 5-only density tightening, so the
+             signature can land with real data instead of alone on a
+             near-empty trailing page. Scoped here (not in the shared
+             TrackStatements.jsx stylesheet) because this <style> tag
+             only exists in the DOM while Statement 5 is the one
+             actually mounted inside .print-container — so it can
+             never affect what Statements 1–4, 6, or 7 look like when
+             printed, even though the selectors themselves
+             (.print-container, @page) are shared names. */
+          @page { size: landscape; margin: 6mm; }
+          .print-container th,
+          .print-container td {
+            padding: 1px 3px !important;
+          }
+          /* 🔸 NEW — more breathing room between "Explanatory Notes"
+             and the signature block specifically for Statement 5.
+             Same scoping logic as above: this only overrides
+             .print-footer's margin-top while this <style> tag exists
+             in the DOM, i.e. only while Statement 5 is the one being
+             printed — Statements 1–4/6/7 keep the shared 45px value
+             from TrackStatements.jsx untouched. */
+          .print-footer {
+            margin-top: 110px !important;
+          }
+        }
+      `}</style>
+
+      <div className="flex flex-col items-center py-4">
+        <h1 className="font-bold text-lg">STATEMENT NO. 5</h1>
+        {(dateRange?.from || dateRange?.to) && (
+          <p className="text-xs text-gray-800">
+            {(() => {
+              const date = new Date(dateRange.from || dateRange.to);
+              const year =
+                date.getMonth() >= 3
+                  ? date.getFullYear()
+                  : date.getFullYear() - 1;
+
+              return `${year} - ${year + 1}`;
+            })()}
+          </p>
+        )}
+        <h2 className="pb-4 font-semibold">
+          Detailed Account of Revenue Receipt by Minor Heads
+        </h2>
+      </div>
+
+      <hr className="w-full mb-4 bg-black" />
+
+      <div className="w-full my-8">
+        <table className="w-full mx-auto border border-black text-[11px] text-center">
+          <thead>
+            <tr>
+              <th className="border font uppercase tracking-wide py-2 w-3/4">
+                Heads
+              </th>
+              <th className="border font uppercase tracking-wide py-2 w-1/4">
+                Actuals
+              </th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {(!statement5Data || statement5Data.length === 0) && (
+              <tr>
+                <td colSpan={2} className="border py-4 font-semibold">
+                  No records found
+                </td>
+              </tr>
+            )}
+
+            {statement5Data?.map((row, idx) => {
+              const isHeaderRow = row.type === "major" || row.type === "sub";
+              const forceBold = isTotalReceiptLabel(row);
+              const isBoldTotalRow =
+                row.type === "total" || row.type === "grandTotal" || forceBold;
+              const rowBgClass =
+                row.type === "grandTotal" || forceBold
+                  ? "bg-gray-200"
+                  : row.type === "total"
+                    ? "bg-gray-100"
+                    : "";
+              return (
+                <tr
+                  key={`row-${idx}-${row.heads}`}
+                  className={`border ${rowBgClass}`}>
+                  <HeadsCell row={row} forceBold={forceBold} />
+                  {isHeaderRow && !forceBold ? (
+                    <td className="border px-4 py-2" />
+                  ) : (
+                    <AmountCell value={row.total} bold={isBoldTotalRow} />
+                  )}
+                </tr>
+              );
+            })}
+            {/* 🔸 GRAND TOTAL row removed from here — moved below,
+                out of the main table, so it can travel together with
+                the hr + Explanatory Notes as one atomic print block. */}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 🔸 GRAND TOTAL + hr + Explanatory Notes, grouped so they
+          never get split apart across a page break, and never left
+          stranded alone on an otherwise-empty page. */}
+      <div className="statement5-tail-block">
+        {statement5Data && statement5Data.length > 0 && (
+          <div className="w-full mb-8 statement5-grand-total-wrap">
+            <table className="w-full mx-auto border border-black text-[11px] text-center">
+              <tbody>
+                <tr className="bg-gray-300 border">
+                  <td className="border px-4 py-3 text-right font-bold tracking-wider text-sm w-3/4">
+                    GRAND TOTAL
+                  </td>
+                  <AmountCell value={grandTotal} bold />
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <hr className="w-full mb-4 bg-black" />
+
+        <div className="px-4 py-2 text-start tracking-wide statement5-notes-wrap">
+          <p className="font-semibold">Explanatory Notes</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Statement5;
